@@ -1,0 +1,42 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(db)/documents/admins/$(request.auth.uid));
+    }
+
+    // অ্যাডমিন তালিকা: Firebase Console থেকে হাতে বানাতে হবে (লেখা বন্ধ)
+    match /admins/{id} { allow read: if signedIn() && request.auth.uid == id; }
+
+    // প্রাইভেট ডোনার প্রোফাইল (পেমেন্ট তথ্য সহ): শুধু মালিক ও অ্যাডমিন
+    match /donors/{uid} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == uid);
+      allow create: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.status == 'pending';
+      allow update: if isAdmin() || (signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['name','contactPhone','social','showPhone','photo','available','lastDonation']));
+      allow delete: if isAdmin();
+    }
+
+    // পাবলিক প্রোফাইল: শুধু অনুমোদিত ডোনারের, দাতার বেছে নেওয়া তথ্য
+    match /public/{uid} {
+      allow read: if true;
+      allow create, update: if isAdmin() || (signedIn() && request.auth.uid == uid
+        && get(/databases/$(db)/documents/donors/$(uid)).data.status == 'approved');
+      allow delete: if isAdmin();
+    }
+
+    // TrxID একবারই ব্যবহার: আগে থেকে থাকলে create হবে না, update শুধু অ্যাডমিন
+    match /trx/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read, update: if isAdmin();
+    }
+    match /dup/{id}       { allow create: if signedIn(); allow read, delete: if isAdmin(); }
+    match /deletions/{uid}{ allow create: if signedIn() && request.auth.uid == uid; allow read, delete: if isAdmin(); }
+    match /reports/{id}   { allow create: if request.resource.data.keys().hasOnly(['donorId','reason','time']); allow read, delete: if isAdmin(); }
+    match /edits/{id}     { allow create: if signedIn(); allow read: if isAdmin(); }
+    match /stats/{id}     { allow read: if true; allow write: if isAdmin(); }
+  }
+}
